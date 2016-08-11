@@ -1,13 +1,15 @@
 # coding:utf-8
 import MySQLdb
+from pyper import *
 import numpy as np
 import math
 
-
+global classNum
+classNum= 200
 class DBConnect:
   def __init__(self):
-    # self.db = MySQLdb.connect("192.168.1.58", "dbuser", "lfmysql", "powerloaddata")
-    self.db = MySQLdb.connect("166.111.81.180", "root", "root2017", "test")
+    self.db = MySQLdb.connect("192.168.1.58", "dbuser", "lfmysql", "powerloaddata")
+    # self.db = MySQLdb.connect("166.111.81.180", "root", "root2017", "test")
 
   def fetch_data(self, query_sql):
     cursor = self.db.cursor()
@@ -170,7 +172,7 @@ class Cluster:
     return centroids
 
     # 对n个用户第i天的数据进行聚类，对每个用户的该段数据产生类标
-  def kmeans(self, dataset, k):
+  def kmeans(self, dataset, label_type, k):
     numSamples, dim = dataset.shape
     clusterAssment = np.mat(np.zeros(numSamples, 2))
     clusterChanged = True
@@ -179,7 +181,7 @@ class Cluster:
     centroids = self.initcentroids(dataset, k)
 
     while clusterChanged:
-      clusterChanged = False;
+      clusterChanged = False
 
       for i in xrange(numSamples):
         minDist = 1
@@ -188,16 +190,44 @@ class Cluster:
         for j in range(k):
           distance = self.curve_distance(dataset[i, :], centroids[j, :])
           if distance < minDist:
-            minDist = distance
-            minIndex = j
+             minDist = distance
+             minIndex = j
         # 对第j类进行更新
         if clusterAssment[i, 0] != minIndex:
           clusterChanged = True
           clusterAssment[i, :] = minIndex, minDist * minDist
       # 更新聚类中心
       for j in range(k):
-        poinsInCluster = dataset[np.nonzero(clusterAssment[:, 0].A == j)[0]]
+        poinsInCluster = dataset[np.nonzero(clusterAssment[:, 0].A == j)[0]]  #TODO: WHAT 'S THIS?
         centroids[j, :] = np.mean(poinsInCluster, axis=0)
+
+    #类别统计
+    mtemp = np.zero(k,classNum)
+    type_rec = [0] * k
+    max = [0] * k
+    userNumber = [0] * k
+
+    for i in range(numSamples):
+      ele = clusterAssment[i,0]
+      mtemp[ele,label_type[i]] += 1
+      userNumber[ele] += 1
+      if mtemp[ele,label_type[i]]>max[ele]:
+        max[ele] = mtemp[ele,label_type[i]]
+        type_rec[ele] = label_type[i]
+
+    #更新用户类别数据
+    for i in range(numSamples):
+      clusterAssment[i, 0] = type_rec[clusterAssment[i, 0]]
+
+    #类别概率计算
+    # TODO: NOTICE TO MODIFY
+    prob = [[0] for i in range(k)]
+    prob = np.matrix(prob)
+    for i in range(numSamples):
+      for j in range(k):
+        c = (clusterAssment[i,0] == label_type[i])
+        prob[i,j] = c+(1-c)*userNumber[ele]/numSamples
+
 
     # 改进部分，对于一个数据，分别计算他与每个簇中心的距离，然后计算一个数据该簇的概率
 
@@ -239,7 +269,7 @@ class Cluster:
     return sk
 
   # 分段操作,并对结果进行统计投票
-  def batch_cluster(self, dataset, cycle, k):
+  def batch_cluster(self, dataset, labeled_type, cycle, k):
     # 初始化
     (n, m) = np.shape(dataset)
     data = np.matrix(dataset)
@@ -249,41 +279,51 @@ class Cluster:
     # 对每个batch处理,但是需要对最后一个batch单独处理以防出现不能整除的情况
     for i in range(num - 1):
       batch = data[:, (i * cycle):((i + 1) * cycle - 1)]  # 提取每一个cycle的数据
-      cl = self.kmeans(batch, k)  # 调用kMean函数,返回该cycle数据反馈的用户类标
+      cl = self.kmeans(batch, labeled_type, k)  # 调用kMean函数,返回该cycle数据反馈的用户类标
       # 对每个用户的分类计数
       for j in range(n):
         table[j][cl[j]] += 1
     batch = data[:, ((num - 2) * cycle):m]  # 提取每一个cycle的数据
-    cl = self.kmeans(batch, k)  # 调用kMean函数,返回该cycle数据反馈的用户类标
+    cl = self.kmeans(batch, labeled_type, k)  # 调用kMean函数,返回该cycle数据反馈的用户类标
     # 对每个用户的分类计数
     for j in range(n):
       table[j][cl[j]] += 1
     # 统计投票,将每个用户得票最多的类标作为当前其类标真值
     for i in range(n):
       res[i] = self.label(table[i])
+
     return res
 
 
 if __name__ == '__main__':
   dayNumber = 30
+
+  cycleNum = 96
+
+  #调用matlab引擎
+  #eng = matlab.engine.start_matlab()
+
+  #连接数据库,获取数据
   print ("here")
   dbconnect = DBConnect()
   process_data = ProcessData()
-  query_sql = "SELECT DISTINCT USERID FROM temporaldata"
+  # query_sql = "SELECT DISTINCT USERID FROM temporaldata"
+  query_sql = "SELECT DISTINCT USERID FROM TemporalData"
   results = dbconnect.fetch_data(query_sql)
   user_ids = []
 
+  #数据制表
   for row in results:
     user_ids.append(row[0])
 
-  file = open('noralization_result.txt', 'a')
+  #file = open('noralization_result.txt', 'a')
   mat = []
   vocation_type = [-1] * len(user_ids)
-  file.write(" UserID     PowerValue \n")
+  #file.write(" UserID     PowerValue \n")
   line = 0
 
   for user_id in user_ids:
-    query_sql = "SELECT PowerValue FROM datapowerhistory WHERE UserID=" + str(user_id) + " LIMIT 0," + str(
+    query_sql = "SELECT PowerValue FROM DataPowerHistory WHERE UserID=" + str(user_id) + " LIMIT 0," + str(
       96 * dayNumber)
     results = dbconnect.fetch_data(query_sql)
     if not results:
@@ -295,26 +335,59 @@ if __name__ == '__main__':
       power_list[i] = data[0]
       i += 1
 
-    query_sql = "SELECT devvipinfo.VOCATIONTYPE FROM devvipinfo WHERE devvipinfo.ID=" + str(user_id)
-    vocation_type[line] = dbconnect.fetch_one_data(query_sql)[0]
+    query_sql = "SELECT DevVIPInfo.VOCATIONTYPE FROM DevVIPInfo WHERE DevVIPInfo.ID=" + str(user_id)
+    one_result=dbconnect.fetch_one_data(query_sql)
+    vocation_type[line] = int(one_result[0])
 
     normalization_data = [0] * len(power_list)
     for day in range(dayNumber):
       undealData = power_list[(day * 96):((day + 1) * 96 - 1)]
       dealedData = process_data.normalize_data_min_min_max(undealData)
       normalization_data[(day * 96):((day + 1) * 96 - 1)] = dealedData
+
     # file.write(str(user_id)+'\n')
     # for result in normalization_data:
     #   file.write('{0:^9d} {1:<}'.format(user_id, result))
     #   file.write('\n')
       # file.write(str(result)+'\n')
+
+    #利用R语句平滑数据
+    # y = rpy2.robjects.FloatVector(normalization_data)
+    # rscript="x<-1:"+str(dayNumber) \
+    #         "model<-loess(y~x,span=0.05)" \
+    #         "y<-model$fit" \
+    #         "y"
+    # y = r(rscript)
+    r=R()
+    origin_data=open('origin_data.txt','w')
+    for result in normalization_data:
+      origin_data.write(str(result) + '\n')
+    origin_data.close()
+    r.assign('y',normalization_data)
+    r("x<-1:"+str(dayNumber))
+    r('y<-as.vector(y[,1])')
+    r('model<-loess(y~x)')
+
+    print r.y
+
+    newdata = r['y']
+    file = open('data_result.txt', 'w')
+    for result in newdata:
+      file.write(str(result)+'\n')
+    file.close()
+
+
+    #更新数据阵
     mat.append(normalization_data)
     line += 1
+
   mat = np.matrix(mat)
   #print np.shape(mat)
-  obj = Cluster()
-  ans = obj.batch_cluster(mat)
 
-  file.close()
+  #执行主要算法
+  obj = Cluster()
+  ans = obj.batch_cluster(mat, vocation_type, cycleNum, classNum)
+
+  #file.close()
 
   dbconnect.close_conn()
